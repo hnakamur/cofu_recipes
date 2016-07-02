@@ -17,66 +17,62 @@ define "lxd_container" {
     force_delete = false,
 
     -- Whether or not wait for all devices have IPv4 addresses.
-    wait_for_all_devices_have_v4addr = true,
+    wait_for_ipv4_addresses = true,
 
     (function()
-        local lxcInfoToCofuStateMap = {
-            [""] = "absent",
-            Running = "started",
-            Stopped = "stopped",
-            Frozen = "frozen"
-        }
+        local Container = {}
 
-        local function get_state(name)
-            local cmd = string.format([[LANG=C lxc info %q | awk '$1=="Status:"{printf("%%s", $2)}']], name)
-            local res = run_command(cmd)
-            return lxcInfoToCofuStateMap[res:stdout()]
+        function Container:new(attrs)
+            attrs = attrs or {}
+            setmetatable(attrs, self)
+            self.__index = self
+            return attrs
         end
 
-        local function launch(name, image)
-            local cmd = string.format("lxc launch %q %q", image, name)
+        function Container:launch(image)
+            local cmd = string.format("lxc launch %q %q", image, self.name)
             return run_command(cmd)
         end
 
-        local function start(name)
-            local cmd = string.format("lxc start %q", name)
+        function Container:start()
+            local cmd = string.format("lxc start %q", self.name)
             return run_command(cmd)
         end
 
-        local function restart(name, force)
+        function Container:restart(force_stop)
             local opt = ""
-            if force then
+            if force_stop then
                 opt = " --force"
             end
-            local cmd = string.format("lxc restart%s %q", opt, name)
+            local cmd = string.format("lxc restart%s %q", opt, self.name)
             return run_command(cmd)
         end
 
-        local function stop(name, force)
+        function Container:stop(force_stop)
             local opt = ""
-            if force then
+            if force_stop then
                 opt = " --force"
             end
-            local cmd = string.format("lxc stop%s %q", opt, name)
+            local cmd = string.format("lxc stop%s %q", opt, self.name)
             return run_command(cmd)
         end
 
-        local function pause(name)
-            local cmd = string.format("lxc pause %q", name)
+        function Container:pause()
+            local cmd = string.format("lxc pause %q", self.name)
             return run_command(cmd)
         end
 
-        local function delete(name, force)
+        function Container:delete(force_delete)
             local opt = ""
-            if force then
+            if force_delete then
                 opt = " --force"
             end
-            local cmd = string.format("lxc delete%s %q", opt, name)
+            local cmd = string.format("lxc delete%s %q", opt, self.name)
             return run_command(cmd)
         end
 
-        local function info(name)
-            local cmd = string.format("LANG=C lxc info %q", name)
+        function Container:get_info()
+            local cmd = string.format("LANG=C lxc info %q", self.name)
             return run_command(cmd)
         end
 
@@ -86,6 +82,24 @@ define "lxd_container" {
 
         local function each_word(text)
             return string.gmatch(text, "[^%s]+")
+        end
+
+        local lxcInfoToCofuStateMap = {
+            Running = "started",
+            Stopped = "stopped",
+            Frozen = "frozen"
+        }
+
+        function Container:get_state()
+            local res = self:get_info()
+            for line in each_line(res:stdout()) do
+                local iter, s = each_word(line)
+                local name = iter(s)
+                if name == "Status:" then
+                    return lxcInfoToCofuStateMap[iter(s)]
+                end
+            end
+            return "absent"
         end
 
         local function all_devices_have_v4addr(info_stdout)
@@ -118,9 +132,9 @@ define "lxd_container" {
             return v4AddrCount == v6AddrCount
         end
 
-        local function wait_for_all_devices_have_v4addr(name)
+        function Container:wait_for_all_devices_to_have_v4addr()
             while true do
-                local res = info(name)
+                local res = self:get_info()
                 if all_devices_have_v4addr(res:stdout()) then
                     break
                 end
@@ -129,50 +143,64 @@ define "lxd_container" {
         end
 
         return function (attrs)
-            local oldState = get_state(attrs.name)
+            local c = Container:new{name=attrs.name}
+            local oldState = c:get_state()
             if attrs.state == "started" then
                 if oldState == "absent" then
-                    launch(attrs.name, attrs.image)
+                    c:launch(attrs.image)
                 elseif oldState == "frozen" then
-                    start(attrs.name)
+                    c:start()
                 elseif oldState == "stopped" then
-                    start(attrs.name)
+                    c:start()
                 end
-                if attrs.wait_for_all_devices_have_v4addr then
-                    wait_for_all_devices_have_v4addr(attrs.name)
+                if attrs.wait_for_ipv4_addresses then
+                    c:wait_for_all_devices_to_have_v4addr()
                 end
             elseif attrs.state == "frozen" then
                 if oldState == "absent" then
-                    launch(attrs.name)
-                    pause(attrs.name)
+                    c:launch(attrs.image)
+                    c:pause()
                 elseif oldState == "started" then
-                    pause(attrs.name)
+                    c:pause()
                 elseif oldState == "stopped" then
-                    start(attrs.name)
-                    pause(attrs.name)
+                    c:start()
+                    c:pause()
                 end
             elseif attrs.state == "stopped" then
                 if oldState == "absent" then
-                    launch(attrs.name)
-                    stop(attrs.name)
+                    c:launch(attrs.image)
+                    c:stop(attrs.force_stop)
                 elseif oldState == "started" then
-                    stop(attrs.name, attrs.force_stop)
+                    c:stop(attrs.force_stop)
                 elseif oldState == "frozen" then
-                    start(attrs.name)
-                    stop(attrs.name, attrs.force_stop)
+                    c:start()
+                    c:stop(attrs.force_stop)
                 end
             elseif attrs.state == "restarted" then
                 if oldState == "absent" then
-                    launch(attrs.name)
+                    c:launch(attrs.image)
                 elseif oldState == "started" then
-                    restart(attrs.name, attrs.force_stop)
+                    c:restart(attrs.force_stop)
                 elseif oldState == "frozen" then
-                    start(attrs.name)
-                    restart(attrs.name, attrs.force_stop)
+                    c:start()
+                    c:restart(attrs.force_stop)
                 end
             elseif attrs.state == "absent" then
                 if oldState ~= "absent" then
-                    delete(attrs.name, attrs.force_delete)
+                    if attrs.force_delete then
+                        c:delete(true)
+                    else
+                        if oldState == "started" then
+                            c:stop(attrs.force_stop)
+                            c:delete(false)
+                        elseif oldState == "frozen" then
+                            c:start()
+                            c:stop(attrs.force_stop)
+                            c:delete(false)
+                        elseif oldState == "stopped" then
+                            c:delete(false)
+                        end
+                    end
                 end
             end
         end
