@@ -7,7 +7,7 @@ define "lxd_container" {
     -- Image name (e.g. "images:ubuntu/xenial/amd64")
     image = "",
 
-    -- State is one of started, stopped, frozen, absent.
+    -- State is one of started, stopped, frozen, restarted or absent.
     state = "started",
 
     -- Whether or not force stop
@@ -38,8 +38,17 @@ define "lxd_container" {
             return run_command(cmd)
         end
 
-        local function start(name, image)
+        local function start(name)
             local cmd = string.format("lxc start %q", name)
+            return run_command(cmd)
+        end
+
+        local function restart(name, force)
+            local opt = ""
+            if force then
+                opt = " --force"
+            end
+            local cmd = string.format("lxc restart%s %q", opt, name)
             return run_command(cmd)
         end
 
@@ -49,6 +58,11 @@ define "lxd_container" {
                 opt = " --force"
             end
             local cmd = string.format("lxc stop%s %q", opt, name)
+            return run_command(cmd)
+        end
+
+        local function pause(name)
+            local cmd = string.format("lxc pause %q", name)
             return run_command(cmd)
         end
 
@@ -72,27 +86,6 @@ define "lxd_container" {
 
         local function each_word(text)
             return string.gmatch(text, "[^%s]+")
-        end
-
-        local function ipv4_addresses(info_stdout)
-            local ipv4Addresses = {}
-            local ipv6Addresses = {}
-            local seen_ips_header = false
-            for line in each_line(info_stdout) do
-                if seen_ips_header then
-                    if line == "Resources:" then
-                        break
-                    else
-                        print("line=" .. line .. "!")
-                        local m = string.match(line, "%s+(%w+):%s+(%w+)%s+(%w+)%s*(%w*)")
-                        print("#m=" .. #m)
-                    end
-                else
-                    if line == "Ips:" then
-                        seen_ips_header = true
-                    end
-                end
-            end
         end
 
         local function all_devices_have_v4addr(info_stdout)
@@ -140,15 +133,42 @@ define "lxd_container" {
             if attrs.state == "started" then
                 if oldState == "absent" then
                     launch(attrs.name, attrs.image)
-                    if attrs.wait_for_all_devices_have_v4addr then
-                        wait_for_all_devices_have_v4addr(attrs.name)
-                    end
+                elseif oldState == "frozen" then
+                    start(attrs.name)
                 elseif oldState == "stopped" then
                     start(attrs.name)
                 end
+                if attrs.wait_for_all_devices_have_v4addr then
+                    wait_for_all_devices_have_v4addr(attrs.name)
+                end
+            elseif attrs.state == "frozen" then
+                if oldState == "absent" then
+                    launch(attrs.name)
+                    pause(attrs.name)
+                elseif oldState == "started" then
+                    pause(attrs.name)
+                elseif oldState == "stopped" then
+                    start(attrs.name)
+                    pause(attrs.name)
+                end
             elseif attrs.state == "stopped" then
-                if oldState == "started" then
+                if oldState == "absent" then
+                    launch(attrs.name)
+                    stop(attrs.name)
+                elseif oldState == "started" then
                     stop(attrs.name, attrs.force_stop)
+                elseif oldState == "frozen" then
+                    start(attrs.name)
+                    stop(attrs.name, attrs.force_stop)
+                end
+            elseif attrs.state == "restarted" then
+                if oldState == "absent" then
+                    launch(attrs.name)
+                elseif oldState == "started" then
+                    restart(attrs.name, attrs.force_stop)
+                elseif oldState == "frozen" then
+                    start(attrs.name)
+                    restart(attrs.name, attrs.force_stop)
                 end
             elseif attrs.state == "absent" then
                 if oldState ~= "absent" then
