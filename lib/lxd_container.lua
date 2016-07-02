@@ -80,8 +80,12 @@ define "lxd_container" {
             return string.gmatch(text, "([^\n]*)\n?")
         end
 
-        local function each_word(text)
-            return string.gmatch(text, "[^%s]+")
+        local function split_words(text)
+            local words = {}
+            for word in string.gmatch(text, "[^%s]+") do
+                words[#words + 1] = word
+            end
+            return words
         end
 
         local lxcInfoToCofuStateMap = {
@@ -93,10 +97,10 @@ define "lxd_container" {
         function Container:get_state()
             local res = self:get_info()
             for line in each_line(res:stdout()) do
-                local iter, s = each_word(line)
-                local name = iter(s)
+                local words = split_words(line)
+                local name = words[1]
                 if name == "Status:" then
-                    return lxcInfoToCofuStateMap[iter(s)]
+                    return lxcInfoToCofuStateMap[words[2]]
                 end
             end
             return "absent"
@@ -111,11 +115,11 @@ define "lxd_container" {
                     if line == "Resources:" then
                         seen_ips_header = false
                     else
-                        local iter, s = each_word(line)
-                        local name = string.gsub(iter(s), ":", "")
+                        local words = split_words(line)
+                        local name = string.gsub(words[1], ":", "")
                         if name ~= "lo" then
-                            local ver = iter(s)
-                            local addr = iter(s)
+                            local ver = words[2]
+                            local addr = words[3]
                             if ver == "inet" then
                                 v4AddrCount = v4AddrCount + 1
                             elseif ver == "inet6" then
